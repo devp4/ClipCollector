@@ -50,7 +50,7 @@ it, set `config.VIDEO_ENCODER = "libx264"` to fall back to CPU encoding.
 
 **3. Get a Gemini API key** and put it in a `.env` file next to `main.py`:
 ```
-GEMINI_API_KEY=your_key_here
+echo "GEMINI_API_KEY=your_actual_key_here" > .env
 ```
 
 **4. Confirm your GPU is visible** to faster-whisper/CTranslate2 — `nvidia-smi` should show the
