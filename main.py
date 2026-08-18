@@ -323,6 +323,69 @@ def merge_overlapping_clips(clips, gap=None):
     return merged
 
 
+def transcribe_with_progress(model, video_path, log_path, log_interval_sec=None):
+    """
+    Runs Whisper transcription while streaming progress to both an
+    interactive tqdm bar AND a plain-text log file (throttled by wall-clock
+    time so it doesn't write a line per segment). The log file is handy for
+    watching progress on a detached/background run -- e.g. if you kick this
+    off in tmux/nohup on a rented GPU pod, `tail -f <video>/transcribe.log`
+    from another SSH session shows exactly how far along it is without
+    needing to reattach to the actual process.
+
+    NOTE: model.transcribe() returns a LAZY generator -- the real
+    transcription work happens as you iterate it, not when you call
+    transcribe(). Calling list(segments_gen) before the progress loop (as
+    an earlier version of this file did) runs the entire transcription
+    first and only THEN "shows" a progress bar that just snaps to 100%
+    instantly. Iterating segments_gen directly inside the loop below is
+    what makes the progress bar (and the log file) actually real-time.
+    """
+    log_interval_sec = log_interval_sec if log_interval_sec is not None else config.TRANSCRIBE_LOG_INTERVAL_SEC
+
+    segments_gen, info = model.transcribe(video_path, word_timestamps=True)
+    total_duration = info.duration
+
+    segments = []
+    processed = 0.0
+    start_wall = time.time()
+    last_log_time = start_wall
+
+    with open(log_path, "w", encoding="utf-8") as log_f, \
+         tqdm(total=total_duration, unit="audio sec", desc="Transcribing") as pbar:
+
+        def log_line(text):
+            print(text)
+            log_f.write(text + "\n")
+            log_f.flush()
+
+        log_line(f"[{time.strftime('%H:%M:%S')}] Starting transcription -- {total_duration:.1f}s of audio, model={config.WHISPER_MODEL_SIZE}, device={config.WHISPER_DEVICE}")
+
+        for seg in segments_gen:
+            segments.append(seg)
+            pbar.update(seg.end - processed)
+            processed = seg.end
+
+            now = time.time()
+            if now - last_log_time >= log_interval_sec:
+                pct = (processed / total_duration * 100) if total_duration else 0.0
+                elapsed = now - start_wall
+                snippet = seg.text.strip()[:80]
+                log_line(
+                    f"[{time.strftime('%H:%M:%S')}] {processed:.1f}s / {total_duration:.1f}s "
+                    f"({pct:.1f}%) elapsed={elapsed:.0f}s -- \"{snippet}\""
+                )
+                last_log_time = now
+
+        if processed < total_duration:
+            pbar.update(total_duration - processed)
+
+        elapsed = time.time() - start_wall
+        log_line(f"[{time.strftime('%H:%M:%S')}] Done -- {len(segments)} segments in {elapsed:.0f}s ({total_duration / max(elapsed, 0.001):.1f}x realtime)")
+
+    return segments, total_duration
+
+
 def main():
     if not config.GEMINI_API_KEY:
         raise RuntimeError("Set the GEMINI_API_KEY environment variable (.env) before running.")
@@ -346,19 +409,10 @@ def main():
     os.makedirs(video_root, exist_ok=True)
     transcript_json_path = f"{video_root}/transcript.json"
     transcript_txt_path = f"{video_root}/transcript.txt"
+    transcribe_log_path = f"{video_root}/transcribe.log"
 
     model = WhisperModel(config.WHISPER_MODEL_SIZE, device=config.WHISPER_DEVICE, compute_type=config.WHISPER_COMPUTE_TYPE)
-    segments_gen, info = model.transcribe(VIDEO_PATH, word_timestamps=True)
-    segments = list(segments_gen)
-    whisper_duration = info.duration
-
-    timestamps = 0.0
-    with tqdm(total=info.duration, unit="audio sec") as pbar:
-        for seg in segments:
-            pbar.update(seg.end - timestamps)
-            timestamps = seg.end
-        if timestamps < info.duration:
-            pbar.update(info.duration - timestamps)
+    segments, whisper_duration = transcribe_with_progress(model, VIDEO_PATH, transcribe_log_path)
 
     save_transcript(transcript_json_path, transcript_txt_path, segments, whisper_duration)
     print(f"Transcript saved to {transcript_json_path} and {transcript_txt_path}")

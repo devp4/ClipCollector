@@ -33,6 +33,10 @@ WHISPER_MODEL_SIZE = "large-v3"
 WHISPER_DEVICE = "cuda"
 WHISPER_COMPUTE_TYPE = "float16"
 
+# How often (in wall-clock seconds) transcription progress gets written to
+# <video>/transcribe.log. Lower = more granular log, more disk writes.
+TRANSCRIBE_LOG_INTERVAL_SEC = 15
+
 # --- Gemini ---
 GEMINI_MODEL = "gemini-3.5-flash"
 
