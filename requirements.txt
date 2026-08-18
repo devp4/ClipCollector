@@ -6,3 +6,4 @@ ffmpeg-python
 numpy
 opencv-python
 requests
+matplotlib

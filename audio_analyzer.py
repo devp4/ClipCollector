@@ -185,3 +185,60 @@ def find_chunk_split_point(times, rms, target_time, search_radius=60.0):
     moment and proposes splitting there instead.
     """
     return snap_to_low_energy(times, rms, target_time, search_radius=search_radius, mode="min")
+
+if __name__ == "__main__":
+    import sys
+    
+    # 1. Grab the video path from the command line, or default to config
+    video_path = sys.argv[1] if len(sys.argv) > 1 else config.DEFAULT_VIDEO_PATH
+    
+    if not os.path.exists(video_path):
+        print(f"Error: Could not find video file at '{video_path}'. Check your path.")
+        sys.exit(1)
+        
+    print(f"\n--- Running Audio Analyzer in Standalone Mode ---")
+    print(f"Target Video: {video_path}")
+    
+    # 2. Run the detection logic
+    times, rms, mean_rms, threshold, spikes, y, sr = detect_loud_spikes(video_path)
+    
+    # 3. Print out the classification details
+    details = get_spike_details(y, sr, times, rms, spikes)
+    print("\nSpike classification:")
+    for d in details:
+        print(f"  {d['peak']:.1f}s -> score={d['score']:.4f} type={d['type']}")
+        
+    # 4. Generate and save the plot (headless mode for RunPod)
+    try:
+        import matplotlib.pyplot as plt
+        
+        print("\nGenerating volume profile graph...")
+        plt.figure(figsize=(14, 6))
+        
+        # Plot the main volume line and thresholds
+        plt.plot(times / 60, rms, label="RMS Energy (Volume)", color="royalblue", alpha=0.8, linewidth=1)
+        plt.axhline(mean_rms, color="green", linestyle="--", label=f"Mean Volume ({mean_rms:.4f})")
+        plt.axhline(threshold, color="red", linestyle="--", label=f"Detection Threshold ({threshold:.4f})")
+        
+        # Overlay orange dots on the exact detected spikes
+        if spikes:
+            spike_times_min = [t / 60 for t in spikes]
+            spike_rms = [rms[np.argmin(np.abs(times - t))] for t in spikes]
+            plt.scatter(spike_times_min, spike_rms, color="orange", label="Detected Spikes", zorder=5)
+            
+        plt.title(f"Audio Profile: {os.path.basename(video_path)}", fontsize=14, fontweight="bold")
+        plt.xlabel("Time (Minutes)", fontsize=12)
+        plt.ylabel("RMS Energy Level", fontsize=12)
+        plt.legend(loc="upper right")
+        plt.grid(True, linestyle=":", alpha=0.6)
+        plt.tight_layout()
+        
+        # Save it to disk instead of trying to open a window
+        output_img = "volume_profile.png"
+        plt.savefig(output_img, dpi=150)
+        print(f"\n✅ Plot successfully saved to '{output_img}'.")
+        print("Double-click this file in your Jupyter Lab sidebar to view your audio peaks!")
+        
+    except ImportError:
+        print("\n❌ Could not generate plot: matplotlib is not installed.")
+        print("Run 'pip install matplotlib' in your terminal to enable graphing.")
