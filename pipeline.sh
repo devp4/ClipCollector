@@ -28,7 +28,7 @@ yt-dlp
 EOT
 
 # Install the packages
-pip install -r requirements.txt --quiet
+pip install -r requirements.txt
 echo "Python dependencies installed successfully."
 
 # ==========================================

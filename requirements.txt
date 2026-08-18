@@ -1,0 +1,8 @@
+yt-dlp
+librosa
+scipy
+matplotlib
+ffmpeg-python
+numpy
+opencv-python
+requests

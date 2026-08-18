@@ -35,7 +35,10 @@ python run_vertical_batch.py some_vod/clips_manifest.json
 ---
 
 ## One-time setup
-
+```
+apt-get update && apt-get install -y ffmpeg
+pip install -r requirements.txt
+```
 **1. Install dependencies:**
 ```
 pip install faster-whisper google-genai librosa scipy numpy tqdm python-dotenv opencv-python yt-dlp
