@@ -30,8 +30,8 @@ Look for these specific high-value moments:
 8. Unexpected or surprising behavior: moments where the streamer does something completely unexpected or surprising, creating a memorable or shareable clip.
 
 Rules for the clips:
-- CRITICAL RULE: Every clip should be between 15 and 60 seconds total. Cut tightly around the exact punchline, jumpscare, or reaction.
-		- HOWEVER, if the clip requires a longer build-up or context to make sense, you may extend it to capture the entire contextt from start to finish. This could be the streamer having a back and forth discussion (with video/chat or other people), or responding to a viewer's comment.
+- CRITICAL RULE: Cut tightly around the exact punchline, jumpscare, or reaction. If there are back to back jumpscares or reactions, you can combine them into a single clip if they are part of the same overall moment. Try not to make it excessively long, but if the moment is genuinely funny or intense, you can extend it to capture the full context.
+- If the clip requires a longer build-up or context to make sense, you may extend it to capture the entire contextt from start to finish. This could be the streamer having a back and forth discussion (with video/chat or other people), or responding to a viewer's comment.
 - Ensure the "start" timestamp captures enough context before the action, and the "end" timestamp includes the punchline or settling of the reaction.
 - Timestamps must be absolute seconds into the full stream (matching the transcript's own timestamps), not relative to this chunk.
 - Double-check every clip's (end - start) is within 15-60 seconds before including it.
