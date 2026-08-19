@@ -108,21 +108,13 @@ def generate_srt_subtitles(segments, clip_start, clip_end, output_srt_path):
 
 def chunk_transcript_and_spikes(segments, spike_details, total_duration, times, rms):
     """
-    Splits the transcript + spike list into overlapping time windows so each
-    Gemini call only has to reason about ~20 minutes of content at a time.
-
-    Two layers of protection against slicing a moment in half at a boundary:
-    1. Each internal boundary is snapped to the nearest genuinely quiet point
-       (via find_chunk_split_point) within CHUNK_BOUNDARY_SEARCH_SEC, instead
-       of always cutting at a fixed clock time.
-    2. On top of that, CHUNK_OVERLAP_SEC (bigger than MAX_CLIP_DURATION) is
-       still applied as a safety net for streams that are loud almost
-       everywhere, where step 1 can't find a truly quiet spot.
-
-    Returns a list of (chunk_start, chunk_end, transcript_text, spikes_json_str).
+    Splits the transcript + spike list into overlapping time windows.
+    UPGRADE: Chronologically interleaves audio spikes directly into the transcript text 
+    so Gemini reads them sequentially, rather than evaluating them separately.
     """
     chunks = []
     chunk_start = 0.0
+    
     while chunk_start < total_duration:
         target_end = chunk_start + config.CHUNK_DURATION_SEC
         if target_end < total_duration:
@@ -133,11 +125,39 @@ def chunk_transcript_and_spikes(segments, spike_details, total_duration, times, 
         else:
             chunk_end = total_duration
 
-        chunk_text = ""
+        # 1. Gather all events (both spoken words and audio spikes) for this chunk
+        events = []
         for seg in segments:
             if seg.end >= chunk_start and seg.start <= chunk_end:
-                chunk_text += f"[{seg.start:.1f}s -> {seg.end:.1f}s]: {seg.text}\n"
+                events.append({
+                    "type": "text",
+                    "start": seg.start,
+                    "end": seg.end,
+                    "content": seg.text.strip()
+                })
 
+        for s in spike_details:
+            if chunk_start <= s["peak"] <= chunk_end:
+                # Format the spike so it stands out to the LLM
+                tag_name = s['type'].replace('_', ' ').upper()
+                events.append({
+                    "type": "audio",
+                    "start": s["peak"],
+                    "content": f"🚨 [AUDIO EVENT: {tag_name} | Intensity: {s['score']:.2f}]"
+                })
+
+        # 2. Sort everything chronologically by start time
+        events.sort(key=lambda x: x["start"])
+
+        # 3. Build the unified timeline string
+        chunk_text = ""
+        for ev in events:
+            if ev["type"] == "text":
+                chunk_text += f"[{ev['start']:.1f}s -> {ev['end']:.1f}s]: \"{ev['content']}\"\n"
+            else:
+                chunk_text += f"[{ev['start']:.1f}s]: {ev['content']}\n"
+
+        # Keep passing the raw JSON in case your prompt still references it explicitly
         chunk_spikes = [
             s for s in spike_details
             if chunk_start <= s["peak"] <= chunk_end
@@ -148,10 +168,10 @@ def chunk_transcript_and_spikes(segments, spike_details, total_duration, times, 
 
         if chunk_end >= total_duration:
             break
+            
         chunk_start = max(0.0, chunk_end - config.CHUNK_OVERLAP_SEC)
 
     return chunks
-
 
 def call_gemini_for_chunk(client, transcript_text, spikes_json_str):
     """
@@ -322,6 +342,72 @@ def merge_overlapping_clips(clips, gap=None):
 
     return merged
 
+def merge_clips_in_90s_window(clips, max_window_sec=90.0):
+    """
+    Greedily groups clips into 90-second windows based on the starting clip's start time.
+    Any subsequent clip that falls completely within [clip_start, clip_start + 90s]
+    will be merged into a single clip.
+    """
+    if not clips:
+        return []
+
+    # Ensure clips are sorted chronologically
+    sorted_clips = sorted(clips, key=lambda x: x['start'])
+    merged_clips = []
+    
+    i = 0
+    n = len(sorted_clips)
+
+    while i < n:
+        first_clip = sorted_clips[i]
+        window_start = first_clip['start']
+        max_allowed_end = window_start + max_window_sec
+        
+        current_group = [first_clip]
+        j = i + 1
+        
+        # Look ahead for any clips that fall within this 90-second window
+        while j < n:
+            next_clip = sorted_clips[j]
+            
+            # If the next clip starts and ends within the 90s window of window_start
+            if next_clip['start'] < max_allowed_end and next_clip['end'] <= max_allowed_end:
+                current_group.append(next_clip)
+                j += 1
+            else:
+                # Stops if a clip starts past the 90s mark or would spill over 90s
+                break
+        
+        # If we grouped multiple clips together, merge them into one entry
+        if len(current_group) > 1:
+            # Combine unique titles
+            titles = [c['title'] for c in current_group if c.get('title')]
+            combined_title = " + ".join(dict.fromkeys(titles))
+            
+            # Combine sources if available
+            sources = [c['source'] for c in current_group if c.get('source')]
+            combined_source = ",".join(dict.fromkeys(sources)) if sources else "merged"
+
+            merged_clip = {
+                'start': window_start,
+                'end': current_group[-1]['end'],
+                'title': combined_title,
+                'source': combined_source
+            }
+            
+            # Preserve any extra metadata fields from the first clip
+            for key, val in first_clip.items():
+                if key not in merged_clip:
+                    merged_clip[key] = val
+
+            merged_clips.append(merged_clip)
+        else:
+            merged_clips.append(first_clip)
+            
+        # Move index to the next unprocessed clip
+        i = j if j > i else i + 1
+
+    return merged_clips
 
 def transcribe_with_progress(model, video_path, log_path, log_interval_sec=None):
     """
@@ -343,7 +429,16 @@ def transcribe_with_progress(model, video_path, log_path, log_interval_sec=None)
     """
     log_interval_sec = log_interval_sec if log_interval_sec is not None else config.TRANSCRIBE_LOG_INTERVAL_SEC
 
-    segments_gen, info = model.transcribe(video_path, word_timestamps=True)
+    segments_gen, info = model.transcribe(
+        video_path,
+        word_timestamps=True,
+        vad_filter=config.WHISPER_VAD_FILTER,
+        vad_parameters=dict(min_silence_duration_ms=config.WHISPER_VAD_MIN_SILENCE_MS),
+        condition_on_previous_text=config.WHISPER_CONDITION_ON_PREVIOUS_TEXT,
+        no_repeat_ngram_size=config.WHISPER_NO_REPEAT_NGRAM_SIZE,
+        repetition_penalty=config.WHISPER_REPETITION_PENALTY,
+        hallucination_silence_threshold=config.WHISPER_HALLUCINATION_SILENCE_THRESHOLD,
+    )
     total_duration = info.duration
 
     segments = []
@@ -474,6 +569,7 @@ def main():
         if total_duration:
             c["end"] = min(c["end"], total_duration)
 
+    final_clips = merge_clips_in_90s_window(final_clips, max_window_sec=90.0)
     print(f"Final clip count after merge/dedup: {len(final_clips)}")
 
     manifest_path = f"{video_root}/clips_manifest.json"

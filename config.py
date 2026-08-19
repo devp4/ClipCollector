@@ -33,6 +33,20 @@ WHISPER_MODEL_SIZE = "large-v3"
 WHISPER_DEVICE = "cuda"
 WHISPER_COMPUTE_TYPE = "float16"
 
+# --- Anti-hallucination settings ---
+# Whisper has a well-known failure mode: during silence or non-speech audio
+# (dead air, game SFX with no talking), it can hallucinate text -- often by
+# getting stuck repeating the last confident word over and over with
+# plausible-looking but fabricated timestamps (e.g. "STOP STOP STOP STOP"
+# across several seconds where nothing was actually said). These settings
+# specifically target that.
+WHISPER_VAD_FILTER = True                    # runs Silero VAD first to skip non-speech audio entirely
+WHISPER_VAD_MIN_SILENCE_MS = 500              # how long a quiet gap must be before VAD treats it as silence
+WHISPER_CONDITION_ON_PREVIOUS_TEXT = False    # True can let a repetition loop self-reinforce across segments
+WHISPER_NO_REPEAT_NGRAM_SIZE = 3              # blocks the decoder from literally repeating the same 3-word phrase
+WHISPER_REPETITION_PENALTY = 1.1              # mild penalty on re-using recent tokens
+WHISPER_HALLUCINATION_SILENCE_THRESHOLD = 2.0 # (seconds, requires word_timestamps=True) skip silence this long if a hallucination is suspected
+
 # How often (in wall-clock seconds) transcription progress gets written to
 # <video>/transcribe.log. Lower = more granular log, more disk writes.
 TRANSCRIBE_LOG_INTERVAL_SEC = 15
